@@ -8,6 +8,7 @@ use bevy_ecs::{
 };
 use bevy_math::{ops::cos, Mat4, Vec3};
 use bevy_pbr::{ExtractedDirectionalLight, ExtractedPointLight, MeshMaterial3d, StandardMaterial};
+use bevy_render::alpha::AlphaMode;
 use bevy_platform::{collections::HashMap, hash::FixedHasher};
 use bevy_render::{
     mesh::allocator::MeshAllocator,
@@ -119,17 +120,31 @@ pub fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        let (alpha_mode, alpha_cutoff) = match material.alpha_mode {
+            AlphaMode::Opaque => (0u32, 1.0),
+            AlphaMode::Mask(c) => (1u32, c),
+            // Treat Blend / Premultiplied / Add / Multiply as Blend
+            // for raytracing purposes — visibility just needs "should
+            // rays pass through?" with the blend factor read from
+            // base_color.alpha.
+            _ => (2u32, 0.0),
+        };
+        let base_color_linear = LinearRgba::from(material.base_color);
+
         materials.get_mut().push(GpuMaterial {
             normal_map_texture_id,
             base_color_texture_id,
             emissive_texture_id,
             metallic_roughness_texture_id,
 
-            base_color: LinearRgba::from(material.base_color).to_vec3(),
+            base_color: base_color_linear.to_vec3(),
             perceptual_roughness: material.perceptual_roughness,
             emissive: material.emissive.to_vec3(),
             metallic: material.metallic,
             reflectance: LinearRgba::from(material.specular_tint).to_vec3() * material.reflectance,
+            alpha_mode,
+            base_color_alpha: base_color_linear.alpha,
+            alpha_cutoff,
             _padding: Default::default(),
         });
 
@@ -394,7 +409,11 @@ struct GpuMaterial {
     emissive: Vec3,
     metallic: f32,
     reflectance: Vec3,
-    _padding: f32,
+    // alpha_mode: 0 = Opaque, 1 = Mask, 2 = Blend.
+    alpha_mode: u32,
+    base_color_alpha: f32,
+    alpha_cutoff: f32,
+    _padding: [f32; 2],
 }
 
 #[derive(ShaderType)]

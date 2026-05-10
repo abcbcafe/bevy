@@ -3,7 +3,7 @@
 #import bevy_pbr::lighting::D_GGX
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
-#import bevy_solari::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, spot_lights, LightSource, LIGHT_SOURCE_KIND_MASK, LIGHT_SOURCE_KIND_EMISSIVE_MESH, LIGHT_SOURCE_KIND_DIRECTIONAL, LIGHT_SOURCE_KIND_SPOT, resolve_triangle_data_full, ResolvedRayHitFull}
+#import bevy_solari::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, RAY_NO_CULL, tlas, materials, material_ids, light_sources, directional_lights, spot_lights, LightSource, LIGHT_SOURCE_KIND_MASK, LIGHT_SOURCE_KIND_EMISSIVE_MESH, LIGHT_SOURCE_KIND_DIRECTIONAL, LIGHT_SOURCE_KIND_SPOT, ALPHA_MODE_OPAQUE, ALPHA_MODE_MASK, resolve_triangle_data_full, ResolvedRayHitFull}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -261,8 +261,26 @@ fn trace_light_visibility(ray_origin: vec3<f32>, light_sample_world_position: ve
 
     if ray_t_max < RAY_T_MIN { return 0.0; }
 
-    let ray_hit = trace_ray(ray_origin, ray_direction, RAY_T_MIN, ray_t_max, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-    return f32(ray_hit.kind == RAY_QUERY_INTERSECTION_NONE);
+    // Manual candidate loop so we can skip alpha-masked / blend
+    // surfaces. Without RAY_FLAG_OPAQUE, every triangle hit becomes a
+    // candidate; we explicitly confirm only those that should occlude.
+    let ray = RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, RAY_NO_CULL, RAY_T_MIN, ray_t_max, ray_origin, ray_direction);
+    var rq: ray_query;
+    rayQueryInitialize(&rq, tlas, ray);
+    while rayQueryProceed(&rq) {
+        let candidate = rayQueryGetCandidateIntersection(&rq);
+        let material_id = material_ids[candidate.instance_index];
+        let material = materials[material_id];
+        if material.alpha_mode == ALPHA_MODE_OPAQUE {
+            rayQueryConfirmIntersection(&rq);
+        } else if material.alpha_mode == ALPHA_MODE_MASK
+            && material.base_color_alpha >= material.alpha_cutoff {
+            rayQueryConfirmIntersection(&rq);
+        }
+        // Mask below cutoff or Blend: rays pass through.
+    }
+    let hit = rayQueryGetCommittedIntersection(&rq);
+    return f32(hit.kind == RAY_QUERY_INTERSECTION_NONE);
 }
 
 fn trace_point_visibility(ray_origin: vec3<f32>, point: vec3<f32>) -> f32 {

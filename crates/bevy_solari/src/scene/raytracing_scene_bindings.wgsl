@@ -48,10 +48,17 @@ struct Material {
     emissive: vec3<f32>,
     metallic: f32,
     reflectance: vec3<f32>,
-    _padding: f32,
+    // 0 = Opaque, 1 = Mask, 2 = Blend.
+    alpha_mode: u32,
+    base_color_alpha: f32,
+    alpha_cutoff: f32,
+    _padding: vec2<f32>,
 }
 
 const TEXTURE_MAP_NONE = 0xFFFFFFFFu;
+const ALPHA_MODE_OPAQUE = 0u;
+const ALPHA_MODE_MASK = 1u;
+const ALPHA_MODE_BLEND = 2u;
 
 struct LightSource {
     // low 2 bits: kind discriminator. upper 30 bits: triangle_count
