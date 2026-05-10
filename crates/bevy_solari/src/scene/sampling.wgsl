@@ -3,7 +3,7 @@
 #import bevy_pbr::lighting::D_GGX
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
-#import bevy_solari::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, resolve_triangle_data_full, ResolvedRayHitFull}
+#import bevy_solari::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, spot_lights, LightSource, LIGHT_SOURCE_KIND_MASK, LIGHT_SOURCE_KIND_EMISSIVE_MESH, LIGHT_SOURCE_KIND_DIRECTIONAL, LIGHT_SOURCE_KIND_SPOT, resolve_triangle_data_full, ResolvedRayHitFull}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -71,6 +71,12 @@ struct ResolvedLightSample {
     world_normal: vec3<f32>,
     radiance: vec3<f32>,
     inverse_pdf: f32,
+    // Spot-light cone parameters. For non-spot lights, `cone_axis` is
+    // zero and (`inner_cos`, `outer_cos`) are sentinel values that make
+    // the cone smoothstep evaluate to 1 unconditionally.
+    cone_axis: vec3<f32>,
+    inner_cos: f32,
+    outer_cos: f32,
 }
 
 struct LightContribution {
@@ -109,8 +115,8 @@ fn generate_random_light_sample(rng: ptr<function, u32>) -> GenerateRandomLightS
     let light_source = light_sources[light_id];
 
     var triangle_id = 0u;
-    if light_source.kind != LIGHT_SOURCE_KIND_DIRECTIONAL {
-        let triangle_count = light_source.kind >> 1u;
+    if (light_source.kind & LIGHT_SOURCE_KIND_MASK) == LIGHT_SOURCE_KIND_EMISSIVE_MESH {
+        let triangle_count = light_source.kind >> 2u;
         triangle_id = rand_range_u(triangle_count, rng);
     }
 
@@ -124,7 +130,8 @@ fn generate_random_light_sample(rng: ptr<function, u32>) -> GenerateRandomLightS
 }
 
 fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) -> ResolvedLightSample {
-    if light_source.kind == LIGHT_SOURCE_KIND_DIRECTIONAL {
+    let kind = light_source.kind & LIGHT_SOURCE_KIND_MASK;
+    if kind == LIGHT_SOURCE_KIND_DIRECTIONAL {
         let directional_light = directional_lights[light_source.id];
 
 #ifndef NO_DIRECTIONAL_LIGHT_SOFT_SHADOWS
@@ -150,9 +157,31 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
             -direction_to_light,
             directional_light.luminance,
             directional_light.inverse_pdf,
+            // Cone unused: sentinels make the smoothstep return 1.
+            vec3(0.0),
+            -2.0,
+            -2.0,
+        );
+    } else if kind == LIGHT_SOURCE_KIND_SPOT {
+        // Spot light is a delta point with a cone-shaped intensity
+        // profile. We return the light's world position with w = 1, so
+        // calculate_resolved_light_contribution applies the geometric
+        // 1/dist² as for any point light. The world_normal is set to
+        // an arbitrary unit vector — `cos_theta_light` is overridden
+        // to 1 inside calculate_resolved_light_contribution when cone
+        // params are non-trivial. Cone attenuation is computed there.
+        let spot_light = spot_lights[light_source.id];
+        return ResolvedLightSample(
+            vec4(spot_light.position, 1.0),
+            spot_light.direction,
+            spot_light.luminance,
+            1.0,
+            spot_light.direction,
+            spot_light.inner_cos,
+            spot_light.outer_cos,
         );
     } else {
-        let triangle_count = light_source.kind >> 1u;
+        let triangle_count = light_source.kind >> 2u;
         let triangle_id = light_sample.light_id & 0xFFFFu;
         let barycentrics = triangle_barycentrics(light_sample.seed);
         let triangle_data = resolve_triangle_data_full(light_source.id, triangle_id, barycentrics);
@@ -162,6 +191,9 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
             triangle_data.world_normal,
             triangle_data.material.emissive.rgb,
             f32(triangle_count) * triangle_data.triangle_area,
+            vec3(0.0),
+            -2.0,
+            -2.0,
         );
     }
 }
@@ -172,10 +204,30 @@ fn calculate_resolved_light_contribution(resolved_light_sample: ResolvedLightSam
     let wi = ray / light_distance;
 
     let cos_theta_origin = saturate(dot(wi, origin_world_normal));
-    let cos_theta_light = saturate(dot(-wi, resolved_light_sample.world_normal));
+
+    // Spot lights are delta points: no surface normal, so cos_theta_light
+    // is 1, and a separate cone falloff replaces the surface attenuation.
+    // Detect via `inner_cos > outer_cos` — non-spot samples store
+    // (-2, -2) as sentinels.
+    let is_spot = resolved_light_sample.inner_cos > resolved_light_sample.outer_cos;
+    var cos_theta_light: f32;
+    var cone_factor: f32;
+    if is_spot {
+        cos_theta_light = 1.0;
+        let cos_axis = dot(resolved_light_sample.cone_axis, -wi);
+        cone_factor = smoothstep(
+            resolved_light_sample.outer_cos,
+            resolved_light_sample.inner_cos,
+            cos_axis,
+        );
+    } else {
+        cos_theta_light = saturate(dot(-wi, resolved_light_sample.world_normal));
+        cone_factor = 1.0;
+    }
+
     let light_distance_squared = light_distance * light_distance;
 
-    let radiance = resolved_light_sample.radiance * cos_theta_origin * (cos_theta_light / light_distance_squared);
+    let radiance = resolved_light_sample.radiance * cos_theta_origin * cone_factor * (cos_theta_light / light_distance_squared);
 
     return LightContribution(radiance, resolved_light_sample.inverse_pdf, wi, resolved_light_sample.world_position.w == 1.0);
 }

@@ -46,10 +46,18 @@ fn pack_resolved_light_sample(sample: ResolvedLightSample) -> ResolvedLightSampl
 }
 
 fn unpack_resolved_light_sample(packed: ResolvedLightSamplePacked, exposure: f32) -> ResolvedLightSample {
+    // Spot-light cone parameters are not preserved through the packed
+    // reservoir format; recovered samples are treated as omnidirectional
+    // points (cone smoothstep = 1 via sentinel cosines). Fixing this
+    // would require either widening the packed format or re-fetching
+    // the SpotLight by id at unpack time.
     return ResolvedLightSample(
         vec4(packed.world_position_x, packed.world_position_y, packed.world_position_z, select(1.0, 0.0, packed.inverse_pdf < 0.0)),
         octahedral_decode(unpack2x16unorm(packed.world_normal)),
         (exp2(rgb9e5_to_vec3_(packed.radiance)) - 1.0) / exposure,
         abs(packed.inverse_pdf),
+        vec3(0.0),
+        -2.0,
+        -2.0,
     );
 }

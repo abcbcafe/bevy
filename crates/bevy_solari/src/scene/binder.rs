@@ -7,7 +7,7 @@ use bevy_ecs::{
     system::{Query, Res, ResMut},
 };
 use bevy_math::{ops::cos, Mat4, Vec3};
-use bevy_pbr::{ExtractedDirectionalLight, MeshMaterial3d, StandardMaterial};
+use bevy_pbr::{ExtractedDirectionalLight, ExtractedPointLight, MeshMaterial3d, StandardMaterial};
 use bevy_platform::{collections::HashMap, hash::FixedHasher};
 use bevy_render::{
     mesh::allocator::MeshAllocator,
@@ -40,6 +40,7 @@ pub fn prepare_raytracing_scene_bindings(
         &GlobalTransform,
     )>,
     directional_lights_query: Query<(Entity, &ExtractedDirectionalLight)>,
+    point_lights_query: Query<(Entity, &ExtractedPointLight)>,
     mesh_allocator: Res<MeshAllocator>,
     blas_manager: Res<BlasManager>,
     material_assets: Res<StandardMaterialAssets>,
@@ -80,6 +81,7 @@ pub fn prepare_raytracing_scene_bindings(
     let mut material_ids = StorageBufferList::<u32>::default();
     let mut light_sources = StorageBufferList::<GpuLightSource>::default();
     let mut directional_lights = StorageBufferList::<GpuDirectionalLight>::default();
+    let mut spot_lights = StorageBufferList::<GpuSpotLight>::default();
     let mut previous_frame_light_id_translations = StorageBufferList::<u32>::default();
 
     let mut material_id_map: HashMap<AssetId<StandardMaterial>, u32, FixedHasher> =
@@ -228,6 +230,27 @@ pub fn prepare_raytracing_scene_bindings(
             .push(entity);
     }
 
+    for (entity, point_light) in &point_lights_query {
+        // Filter to spot lights only — ExtractedPointLight is shared
+        // between point and spot, distinguished by spot_light_angles.
+        if point_light.spot_light_angles.is_none() {
+            continue;
+        }
+        let spot_lights = spot_lights.get_mut();
+        let spot_light_id = spot_lights.len() as u32;
+
+        spot_lights.push(GpuSpotLight::new(point_light));
+
+        light_sources
+            .get_mut()
+            .push(GpuLightSource::new_spot_light(spot_light_id));
+
+        this_frame_entity_to_light_id.insert(entity, light_sources.get().len() as u32 - 1);
+        raytracing_scene_bindings
+            .previous_frame_light_entities
+            .push(entity);
+    }
+
     for previous_frame_light_entity in previous_frame_light_entities {
         let current_frame_index = this_frame_entity_to_light_id
             .get(&previous_frame_light_entity)
@@ -248,6 +271,7 @@ pub fn prepare_raytracing_scene_bindings(
     material_ids.write_buffer(&render_device, &render_queue);
     light_sources.write_buffer(&render_device, &render_queue);
     directional_lights.write_buffer(&render_device, &render_queue);
+    spot_lights.write_buffer(&render_device, &render_queue);
     previous_frame_light_id_translations.write_buffer(&render_device, &render_queue);
 
     let mut command_encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
@@ -272,6 +296,7 @@ pub fn prepare_raytracing_scene_bindings(
             light_sources.binding().unwrap(),
             directional_lights.binding().unwrap(),
             previous_frame_light_id_translations.binding().unwrap(),
+            spot_lights.binding().unwrap(),
         )),
     ));
 }
@@ -292,6 +317,7 @@ impl RaytracingSceneBindings {
                         sampler(SamplerBindingType::Filtering).count(MAX_TEXTURE_COUNT),
                         storage_buffer_read_only_sized(false, None),
                         acceleration_structure(),
+                        storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
@@ -383,8 +409,11 @@ impl GpuLightSource {
             panic!("Too many triangles ({triangle_count}) in an emissive mesh, maximum is 65535.");
         }
 
+        // kind layout: low 2 bits = kind discriminator (0 = emissive,
+        // 1 = directional, 2 = spot), upper 30 bits = triangle_count
+        // for emissive (unused otherwise).
         Self {
-            kind: triangle_count << 1,
+            kind: triangle_count << 2,
             id: instance_id,
         }
     }
@@ -393,6 +422,13 @@ impl GpuLightSource {
         Self {
             kind: 1,
             id: directional_light_id,
+        }
+    }
+
+    fn new_spot_light(spot_light_id: u32) -> GpuLightSource {
+        Self {
+            kind: 2,
+            id: spot_light_id,
         }
     }
 }
@@ -417,6 +453,41 @@ impl GpuDirectionalLight {
             cos_theta_max,
             luminance,
             inverse_pdf: solid_angle,
+        }
+    }
+}
+
+#[derive(ShaderType, Default)]
+struct GpuSpotLight {
+    position: Vec3,
+    range_squared: f32,
+    direction: Vec3,
+    inner_cos: f32,
+    luminance: Vec3,
+    outer_cos: f32,
+}
+
+impl GpuSpotLight {
+    fn new(point_light: &ExtractedPointLight) -> Self {
+        // Caller filters on `spot_light_angles.is_some()`.
+        let (inner_angle, outer_angle) = point_light
+            .spot_light_angles
+            .expect("GpuSpotLight::new called on non-spot ExtractedPointLight");
+        // Bevy SpotLight points down -Z in light space; transform.forward()
+        // returns world-space -Z, which is the cone axis pointing into
+        // the scene.
+        let direction = point_light.transform.forward().as_vec3();
+        let position = point_light.transform.translation();
+        // ExtractedPointLight.intensity is in lumens-per-steradian (cd),
+        // i.e. already a radiometric quantity per unit solid angle.
+        let luminance = point_light.color.to_vec3() * point_light.intensity;
+        Self {
+            position,
+            range_squared: point_light.range * point_light.range,
+            direction,
+            inner_cos: cos(inner_angle),
+            luminance,
+            outer_cos: cos(outer_angle),
         }
     }
 }

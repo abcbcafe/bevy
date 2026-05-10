@@ -54,18 +54,31 @@ struct Material {
 const TEXTURE_MAP_NONE = 0xFFFFFFFFu;
 
 struct LightSource {
-    kind: u32, // 1 bit for kind, 31 bits for extra data
+    // low 2 bits: kind discriminator. upper 30 bits: triangle_count
+    // for emissive (unused for directional and spot).
+    kind: u32,
     id: u32,
 }
 
+const LIGHT_SOURCE_KIND_MASK = 0x3u;
 const LIGHT_SOURCE_KIND_EMISSIVE_MESH = 0u;
 const LIGHT_SOURCE_KIND_DIRECTIONAL = 1u;
+const LIGHT_SOURCE_KIND_SPOT = 2u;
 
 struct DirectionalLight {
     direction_to_light: vec3<f32>,
     cos_theta_max: f32,
     luminance: vec3<f32>,
     inverse_pdf: f32,
+}
+
+struct SpotLight {
+    position: vec3<f32>,
+    range_squared: f32,
+    direction: vec3<f32>,
+    inner_cos: f32,
+    luminance: vec3<f32>,
+    outer_cos: f32,
 }
 
 const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
@@ -82,6 +95,7 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 @group(0) @binding(9) var<storage> light_sources: array<LightSource>;
 @group(0) @binding(10) var<storage> directional_lights: array<DirectionalLight>;
 @group(0) @binding(11) var<storage> previous_frame_light_id_translations: array<u32>;
+@group(0) @binding(12) var<storage> spot_lights: array<SpotLight>;
 
 const RAY_T_MIN = 0.001f;
 const RAY_T_MAX = 100000.0f;
