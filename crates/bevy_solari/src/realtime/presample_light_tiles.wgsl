@@ -59,5 +59,6 @@ fn unpack_resolved_light_sample(packed: ResolvedLightSamplePacked, exposure: f32
         vec3(0.0),
         -2.0,
         -2.0,
+        3.402823e38,
     );
 }

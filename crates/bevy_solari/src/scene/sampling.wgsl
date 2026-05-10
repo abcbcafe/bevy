@@ -72,11 +72,13 @@ struct ResolvedLightSample {
     radiance: vec3<f32>,
     inverse_pdf: f32,
     // Spot-light cone parameters. For non-spot lights, `cone_axis` is
-    // zero and (`inner_cos`, `outer_cos`) are sentinel values that make
-    // the cone smoothstep evaluate to 1 unconditionally.
+    // zero, the cosines are sentinel values that make the cone
+    // smoothstep evaluate to 1, and `range_squared` is set to a huge
+    // value so the cutoff never triggers.
     cone_axis: vec3<f32>,
     inner_cos: f32,
     outer_cos: f32,
+    range_squared: f32,
 }
 
 struct LightContribution {
@@ -157,10 +159,12 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
             -direction_to_light,
             directional_light.luminance,
             directional_light.inverse_pdf,
-            // Cone unused: sentinels make the smoothstep return 1.
+            // Cone + range unused for directional lights: sentinels make
+            // the smoothstep return 1 and the range cutoff never trip.
             vec3(0.0),
             -2.0,
             -2.0,
+            3.402823e38,
         );
     } else if kind == LIGHT_SOURCE_KIND_SPOT {
         // Spot light is a delta point with a cone-shaped intensity
@@ -179,6 +183,7 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
             spot_light.direction,
             spot_light.inner_cos,
             spot_light.outer_cos,
+            spot_light.range_squared,
         );
     } else {
         let triangle_count = light_source.kind >> 2u;
@@ -194,6 +199,7 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
             vec3(0.0),
             -2.0,
             -2.0,
+            3.402823e38,
         );
     }
 }
@@ -227,7 +233,11 @@ fn calculate_resolved_light_contribution(resolved_light_sample: ResolvedLightSam
 
     let light_distance_squared = light_distance * light_distance;
 
-    let radiance = resolved_light_sample.radiance * cos_theta_origin * cone_factor * (cos_theta_light / light_distance_squared);
+    // Hard cutoff beyond the light's range — for directional/emissive
+    // this never trips because range_squared is set to f32::MAX.
+    let range_factor = select(0.0, 1.0, light_distance_squared <= resolved_light_sample.range_squared);
+
+    let radiance = resolved_light_sample.radiance * cos_theta_origin * cone_factor * range_factor * (cos_theta_light / light_distance_squared);
 
     return LightContribution(radiance, resolved_light_sample.inverse_pdf, wi, resolved_light_sample.world_position.w == 1.0);
 }
