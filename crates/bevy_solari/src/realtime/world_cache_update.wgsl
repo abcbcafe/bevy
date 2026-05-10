@@ -2,7 +2,7 @@
 #import bevy_pbr::utils::{rand_f, rand_range_u, sample_cosine_hemisphere}
 #import bevy_render::view::View
 #import bevy_solari::presample_light_tiles::{ResolvedLightSamplePacked, unpack_resolved_light_sample}
-#import bevy_solari::sampling::{calculate_resolved_light_contribution, trace_light_visibility}
+#import bevy_solari::sampling::{calculate_resolved_light_contribution, trace_light_visibility, LightSample}
 #import bevy_solari::scene_bindings::{trace_ray, resolve_ray_hit_full, RAY_T_MIN}
 #import bevy_solari::world_cache::{
     WORLD_CACHE_MAX_TEMPORAL_SAMPLES,
@@ -18,6 +18,7 @@
     world_cache_active_cells_new_radiance,
 }
 
+@group(1) @binding(1) var<storage, read_write> light_tile_samples: array<LightSample>;
 @group(1) @binding(2) var<storage, read_write> light_tile_resolved_samples: array<ResolvedLightSamplePacked>;
 @group(1) @binding(12) var<uniform> view: View;
 struct PushConstants { frame_index: u32, reset: u32 }
@@ -82,7 +83,7 @@ fn sample_random_light_ris(world_position: vec3<f32>, world_normal: vec3<f32>, w
     let mis_weight = 1.0 / f32(WORLD_CACHE_DIRECT_LIGHT_SAMPLE_COUNT);
     for (var i = 0u; i < WORLD_CACHE_DIRECT_LIGHT_SAMPLE_COUNT; i++) {
         let tile_sample = light_tile_start + rand_range_u(1024u, rng);
-        let resolved_light_sample = unpack_resolved_light_sample(light_tile_resolved_samples[tile_sample], view.exposure);
+        let resolved_light_sample = unpack_resolved_light_sample(light_tile_resolved_samples[tile_sample], light_tile_samples[tile_sample], view.exposure);
         let light_contribution = calculate_resolved_light_contribution(resolved_light_sample, world_position, world_normal);
 
         let target_function = luminance(light_contribution.radiance);

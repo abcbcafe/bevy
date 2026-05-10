@@ -122,7 +122,7 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
     var selected_tile_sample = 0u;
     for (var i = 0u; i < INITIAL_SAMPLES; i++) {
         let tile_sample = light_tile_start + rand_range_u(1024u, rng);
-        let resolved_light_sample = unpack_resolved_light_sample(light_tile_resolved_samples[tile_sample], view.exposure);
+        let resolved_light_sample = unpack_resolved_light_sample(light_tile_resolved_samples[tile_sample], light_tile_samples[tile_sample], view.exposure);
         let light_contribution = calculate_resolved_light_contribution(resolved_light_sample, world_position, world_normal);
 
         let target_function = luminance(light_contribution.radiance * diffuse_brdf);
