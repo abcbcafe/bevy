@@ -1,4 +1,5 @@
 use bevy_asset::Handle;
+use bevy_camera::visibility::{Visibility, VisibilityClass};
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::{component::Component, prelude::ReflectComponent};
 use bevy_mesh::Mesh;
@@ -17,5 +18,5 @@ use derive_more::derive::From;
 /// The material used for this entity must be [`MeshMaterial3d<StandardMaterial>`].
 #[derive(Component, Clone, Debug, Default, Deref, DerefMut, Reflect, PartialEq, Eq, From)]
 #[reflect(Component, Default, Clone, PartialEq)]
-#[require(MeshMaterial3d<StandardMaterial>, Transform, SyncToRenderWorld)]
+#[require(MeshMaterial3d<StandardMaterial>, Transform, Visibility, VisibilityClass, SyncToRenderWorld)]
 pub struct RaytracingMesh3d(pub Handle<Mesh>);
